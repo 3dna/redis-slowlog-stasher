@@ -1,0 +1,159 @@
+#!/usr/bin/env ruby
+
+require 'redis_slowlog_stasher'
+
+
+require 'time'
+require 'redis'
+require 'bunny'
+require 'optparse'
+require 'ostruct'
+require 'uri'
+require 'json'
+
+options = OpenStruct.new
+
+options.check_interval = 10
+options.check_entries = 25
+options.exchange = 'logstash'
+options.routing_key = 'logstash'
+
+logger = Logger.new(STDOUT)
+
+OptionParser.new do |opts|
+  opts.banner = 'Usage: redis-slowlog-stasher [options] redis-server rabbitmq-amqp-uri'
+
+  opts.separator ""
+  opts.separator "options:"
+
+  opts.on("--exchange EXCHANGE", String, "the name of the exchange to use") do |exchange|
+    options.exchange = exchange
+  end
+
+  opts.on("--routing-key KEY", String, "the routing key to use") do |routing_key|
+    options.routing_key = routing_key
+  end
+
+  opts.on("--state-file FILE", String, "the path to the state file which tells this program which",
+          "slowlog entry was the last one processed so we can attempt",
+          "to not lose any messages and not duplicate any, either.") do |state_file|
+    options.state_file = StateFile.new(state_file)
+  end
+
+  opts.on("--type TYPE", String, "the value of the type field of the event") do | type |
+    options.type = type
+  end
+
+  opts.on("--tags tag1,tag2,tag3", Array, "a list of tags to add to the event") do | tags |
+    options.tags ||= []
+    options.tags.concat(tags)
+  end
+
+  opts.on("--add-field field1=value1,field2=value2", Array, "a list of option fields and their values to add to the event") do |fields|
+    options.fields ||= {}
+    options.fields.merge!(Hash[fields.map { |field| field.split('=', 2) }])
+  end
+
+  opts.on("--check-interval SECONDS", Float, "how frequently to check the slowlog for new entries. In seconds") do |check_interval|
+    options.check_interval = check_interval
+  end
+
+  opts.on("--check-entries COUNT", Integer, "how many entries to check for each interval.") do |check_entries|
+    options.check_entries = check_entries
+  end
+
+  opts.on("--log-level LEVEL", ["FATAL","ERROR","WARN","INFO","DEBUG"], "sets the level of output verbosity") do |log_level|
+    case log_level
+    when "FATAL"
+      logger.level = Logger::FATAL
+    when "ERROR"
+      logger.level = Logger::ERROR
+    when "WARN"
+      logger.level = Logger::WARN
+    when "INFO"
+      logger.level = Logger::INFO
+    when "DEBUG"
+      logger.level = Logger::DEBUG
+    end
+  end
+
+  opts.on_tail("-h", "--help", "Show this message") do
+    puts opts
+    exit
+  end
+
+  opts.on_tail("--version", "Show version") do
+    puts '0.0.1'
+    exit
+  end
+
+end.parse!
+
+redis_arg, rabbit_arg = ARGV
+
+# methinks this logic should just be in the StateFile?
+# if you pass it a nil filename write is a noop and read gives you 0,0?
+if options.state_file
+  previous_entry_timestamp, previous_entry_id = options.state_file.read
+else
+  previous_entry_timestamp, previous_entry_id = [0,0]
+end
+
+redis_uri = URI.parse(redis_arg)
+redis = Redis.new(host: redis_uri.host, port: redis_uri.port)
+
+rabbit = Bunny.new(rabbit_arg)
+rabbit.start
+channel = rabbit.create_channel
+exchange = channel.direct(options.exchange)
+
+base_event_object = {}
+if options.type
+  base_event_object.merge!({'type' => options.type})
+end
+if options.tags
+  base_event_object.merge!({'tags' => options.tags})
+end
+if options.fields
+  base_event_object.merge!(options.fields)
+end
+
+# start the main loop
+loop do
+  logger.debug("loop iteration")
+  slowlog_entries = redis.slowlog('get',options.check_entries)
+
+  slowlog_entries.reverse.each do |slowlog_entry|
+    # "parse" the entry
+    entry_id, entry_timestamp, duration, args = slowlog_entry
+    command = args.shift
+
+    #logger.debug("previous_entry_id: #{previous_entry_id}, entry_id: #{entry_id}; previous_entry_timestamp: #{previous_entry_timestamp}, entry_timestamp: #{entry_timestamp}")
+
+    # TODO: combine all of these into one ugly if
+    if (entry_id > previous_entry_id) || (entry_id < previous_entry_id && entry_timestamp >= previous_entry_timestamp) || (entry_id == previous_entry_id && entry_timestamp != previous_entry_timestamp)
+      logger.info("new entry id #{entry_id} duration #{duration} with timestamp #{entry_timestamp}: #{command} #{args}")
+      entry_hash = base_event_object.merge({
+        '@timestamp' => Time.at(entry_timestamp).utc.iso8601,
+        'version' => 1,
+        'duration' => duration,
+        'command' => command,
+        'args' => args,
+      })
+
+      logger.debug(entry_hash.to_json)
+      # log it
+      exchange.publish(entry_hash.to_json, routing_key: options.routing_key)
+
+      # update trackers
+      previous_entry_timestamp = entry_timestamp
+      previous_entry_id = entry_id
+      if options.state_file
+        options.state_file.write(entry_timestamp, entry_id)
+      end
+    end
+  end
+
+  sleep options.check_interval
+end
+

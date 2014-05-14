@@ -1,0 +1,14 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    amq-protocol (1.8.0)
+    bunny (1.0.3)
+      amq-protocol (>= 1.8.0)
+    redis (3.0.7)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  bunny
+  redis
