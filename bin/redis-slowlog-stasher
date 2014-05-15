@@ -23,7 +23,7 @@ else
 end
 
 redis_uri = URI.parse(redis_arg)
-redis = Redis.new(host: redis_uri.host, port: redis_uri.port)
+redis = Redis.new(host: redis_uri.host, port: redis_uri.port, password: redis_uri.user)
 
 rabbit = Bunny.new(rabbit_arg)
 rabbit.start
