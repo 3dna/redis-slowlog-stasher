@@ -57,15 +57,15 @@ module RedisSlowlogStasher
         opts.on("--log-level LEVEL", ["FATAL","ERROR","WARN","INFO","DEBUG"], "sets the level of output verbosity") do |log_level|
           case log_level
           when "FATAL"
-            logger.level = Logger::FATAL
+            options.logger.level = Logger::FATAL
           when "ERROR"
-            logger.level = Logger::ERROR
+            options.logger.level = Logger::ERROR
           when "WARN"
-            logger.level = Logger::WARN
+            options.logger.level = Logger::WARN
           when "INFO"
-            logger.level = Logger::INFO
+            options.logger.level = Logger::INFO
           when "DEBUG"
-            logger.level = Logger::DEBUG
+            options.logger.level = Logger::DEBUG
           end
         end
 
