@@ -75,7 +75,7 @@ module RedisSlowlogStasher
         end
 
         opts.on_tail("--version", "Show version") do
-          puts '0.0.1'
+          puts RedisSlowlogStasher::VERSION
           exit
         end
 
