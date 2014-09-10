@@ -50,6 +50,7 @@ loop do
     # "parse" the entry
     entry_id, entry_timestamp, duration, args = slowlog_entry
     command = args.shift
+    args.map! { |arg| arg.force_encoding('US-ASCII')
 
     #logger.debug("previous_entry_id: #{previous_entry_id}, entry_id: #{entry_id}; previous_entry_timestamp: #{previous_entry_timestamp}, entry_timestamp: #{entry_timestamp}")
 
